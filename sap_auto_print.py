@@ -194,7 +194,7 @@ def find_print_button(print_window):
 
         if len(buttons) >= 2:
 
-            candidate = buttons[1]
+            candidate = buttons[2]
 
             try:
 

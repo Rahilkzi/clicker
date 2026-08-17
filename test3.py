@@ -1,52 +1,31 @@
 from pywinauto import Desktop
 
 
-# ============================================================
-# SAP UI AUTOMATION - WINDOW DETECTION TEST
-# ============================================================
+ERROR_TEXT = "This file does not have an app associated with it"
 
 desktop = Desktop(backend="win32")
 
-ERROR_TEXT = "This file does not have an app associated with it"
-
-
-def get_text(control):
-    try:
-        return control.window_text().strip()
-    except Exception:
-        return ""
-
 
 print()
 print("=" * 60)
-print("                 SAP UI AUTOMATION TEST")
+print("              SAP UI AUTOMATION TEST")
 print("=" * 60)
 
 
 # ============================================================
-# 1. FIND PRINT WINDOWS
+# FIND SAP PRINT WINDOWS
 # ============================================================
 
 print()
-print("=" * 20)
-print("SAP PRINT WINDOWS")
-print("=" * 20)
+print("========== SAP PRINT WINDOWS ==========")
 print()
 
 print_windows = []
 
-try:
-    windows = desktop.windows(visible_only=True)
-except Exception as e:
-    print("Could not enumerate windows:", e)
-    windows = []
-
-
-for window in windows:
+for window in desktop.windows(visible_only=True):
 
     try:
-
-        title = get_text(window)
+        title = window.window_text().strip()
 
         if title == "Print:":
 
@@ -61,87 +40,64 @@ for window in windows:
             print()
             print("--- BUTTONS ---")
 
-            try:
+            for i, button in enumerate(
+                window.descendants(class_name="Button")
+            ):
 
-                buttons = window.descendants(class_name="Button")
-
-                for i, button in enumerate(buttons):
-
-                    try:
-
-                        print(
-                            f"[{i}] "
-                            f"text={button.window_text()!r} "
-                            f"class={button.class_name()!r} "
-                            f"handle={button.handle}"
-                        )
-
-                    except Exception:
-                        pass
-
-            except Exception as e:
-
-                print("Button scan error:", e)
+                try:
+                    print(
+                        f"[{i}] "
+                        f"text={button.window_text()!r} "
+                        f"class={button.class_name()!r} "
+                        f"handle={button.handle}"
+                    )
+                except Exception:
+                    pass
 
             print()
             print("-" * 60)
 
+    except Exception:
+        pass
+
 
 if print_windows:
-
     print()
     print("✓ SAP Print window FOUND")
-
 else:
-
     print()
     print("❌ SAP Print window NOT FOUND")
 
 
 # ============================================================
-# 2. FIND ALL WINDOWS WITH CLASS #32770
+# FIND WINDOWS ERROR DIALOGS
 # ============================================================
 
 print()
-print("=" * 20)
-print("WINDOWS CLASS #32770")
-print("=" * 20)
+print("========== WINDOWS ERROR DIALOGS ==========")
 print()
 
 
-dialogs = []
+error_windows = []
 
-try:
-
-    dialogs = desktop.windows(
-        class_name="#32770",
-        visible_only=True
-    )
-
-except Exception as e:
-
-    print("Dialog enumeration error:", e)
+dialogs = desktop.windows(
+    class_name="#32770",
+    visible_only=True
+)
 
 
 print("Total #32770 dialogs found:", len(dialogs))
 print()
 
 
-# ============================================================
-# 3. INSPECT EVERY #32770 DIALOG
-# ============================================================
-
-error_windows = []
-
-
 for number, dialog in enumerate(dialogs, start=1):
 
     try:
 
-        title = get_text(dialog)
+        title = dialog.window_text().strip()
 
         print("=" * 60)
-        print(f"DIALOG #{number}")
+        print("DIALOG #", number)
         print("=" * 60)
 
         print("Title  :", repr(title))
@@ -161,88 +117,57 @@ for number, dialog in enumerate(dialogs, start=1):
 
         found_error = False
 
-        try:
+        for i, control in enumerate(dialog.descendants()):
 
-            controls = dialog.descendants()
+            try:
 
-            for i, control in enumerate(controls):
+                text = control.window_text().strip()
 
-                try:
+                if not text:
+                    continue
 
-                    text = get_text(control)
+                print(
+                    f"[{i}] "
+                    f"text={text!r} "
+                    f"class={control.class_name()!r} "
+                    f"handle={control.handle}"
+                )
 
-                    if text:
+                if ERROR_TEXT.lower() in text.lower():
+                    found_error = True
 
-                        class_name = control.class_name()
-
-                        print(
-                            f"[{i}] "
-                            f"text={text!r} "
-                            f"class={class_name!r} "
-                            f"handle={control.handle}"
-                        )
-
-                        # ------------------------------------
-                        # CHECK ERROR TEXT
-                        # ------------------------------------
-
-                        if ERROR_TEXT.lower() in text.lower():
-
-                            found_error = True
-
-                except Exception:
-                    pass
-
-        except Exception as e:
-
-            print("Control scan error:", e)
+            except Exception:
+                pass
 
 
-        # ====================================================
-        # ALSO CHECK THE DIALOG TITLE
-        # ====================================================
+        # Check dialog title too
 
         if ERROR_TEXT.lower() in title.lower():
-
             found_error = True
 
-
-        # ====================================================
-        # ERROR FOUND
-        # ====================================================
 
         if found_error:
 
             error_windows.append(dialog)
 
             print()
-            print(">>> ✓ PDF ERROR WINDOW DETECTED <<<")
+            print(">>> PDF ERROR WINDOW FOUND <<<")
             print()
-            print(
-                "Error text detected:"
-            )
-            print(
-                ERROR_TEXT
-            )
 
         else:
 
             print()
             print("Not the PDF error dialog.")
-
-        print()
+            print()
 
 
     except Exception as e:
 
-        print(
-            f"Error inspecting dialog #{number}:",
-            e
-        )
+        print("Dialog inspection error:", e)
 
 
 # ============================================================
-# 4. FINAL RESULT
+# FINAL SUMMARY
 # ============================================================
 
 print()
@@ -253,23 +178,17 @@ print()
 
 
 if print_windows:
-
     print("SAP Print window : FOUND")
-
 else:
-
     print("SAP Print window : NOT FOUND")
 
 
 if error_windows:
-
     print(
         "PDF Error window : FOUND"
-        f" ({len(error_windows)} dialog)"
+        f" ({len(error_windows)})"
     )
-
 else:
-
     print("PDF Error window : NOT FOUND")
 
 

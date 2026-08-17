@@ -1,0 +1,182 @@
+from pywinauto import Desktop
+
+
+print("\n========================================")
+print("       SAP UI AUTOMATION TEST")
+print("========================================\n")
+
+
+desktop = Desktop(backend="win32")
+
+
+# ============================================================
+# SAP PRINT WINDOWS
+# ============================================================
+
+print("========== SAP PRINT WINDOWS ==========\n")
+
+found_print = False
+
+for window in desktop.windows(visible_only=True):
+
+    try:
+        title = window.window_text()
+        class_name = window.class_name()
+
+        # SAP Print dialog
+        if title.strip().lower() == "print:":
+
+            found_print = True
+
+            print("WINDOW")
+            print("Title  :", repr(title))
+            print("Class  :", repr(class_name))
+            print("Handle :", window.handle)
+
+            try:
+                print("PID    :", window.process_id())
+            except Exception:
+                pass
+
+            print("\n--- BUTTONS ---")
+
+            buttons = window.descendants(
+                class_name="Button"
+            )
+
+            if not buttons:
+                print("NO BUTTONS FOUND")
+
+            for i, button in enumerate(buttons):
+
+                try:
+                    print(
+                        f"[{i}] "
+                        f"text={button.window_text()!r} | "
+                        f"class={button.class_name()!r} | "
+                        f"handle={button.handle}"
+                    )
+
+                except Exception:
+                    pass
+
+            print("\n----------------------------------------\n")
+
+    except Exception:
+        pass
+
+
+if not found_print:
+    print("❌ SAP Print window not found.")
+    print()
+    print("Make sure SAP is showing the 'Print:' dialog.")
+    print()
+
+
+# ============================================================
+# ERROR WINDOWS
+# ============================================================
+
+print("\n========== SAP ERROR WINDOWS ==========\n")
+
+found_error = False
+
+for window in desktop.windows(visible_only=True):
+
+    try:
+        title = window.window_text()
+        class_name = window.class_name()
+
+        # Windows dialog class
+        if class_name == "#32770":
+
+            # Get all visible text from the dialog
+            texts = []
+
+            for control in window.descendants():
+
+                try:
+                    text = control.window_text().strip()
+
+                    if text:
+                        texts.append(text)
+
+                except Exception:
+                    pass
+
+            combined_text = " ".join(texts).lower()
+
+            # Detect the specific PDF/application error
+            is_pdf_error = (
+                "does not have an app associated" in combined_text
+                or
+                "app associated with it" in combined_text
+            )
+
+            if is_pdf_error:
+
+                found_error = True
+
+                print("ERROR WINDOW FOUND")
+                print("Title  :", repr(title))
+                print("Class  :", repr(class_name))
+                print("Handle :", window.handle)
+
+                try:
+                    print("PID    :", window.process_id())
+                except Exception:
+                    pass
+
+                print("\n--- CONTROLS ---")
+
+                for i, control in enumerate(window.descendants()):
+
+                    try:
+                        text = control.window_text().strip()
+
+                        if text:
+                            print(
+                                f"[{i}] "
+                                f"text={text!r} | "
+                                f"class={control.class_name()!r} | "
+                                f"handle={control.handle}"
+                            )
+
+                    except Exception:
+                        pass
+
+                print("\n----------------------------------------\n")
+
+    except Exception:
+        pass
+
+
+if not found_error:
+    print("NO TARGET PDF ERROR WINDOW FOUND.")
+    print()
+    print("If the error dialog is currently visible,")
+    print("check that it contains:")
+    print()
+    print("This file does not have an app associated with it")
+    print()
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+print("\n========================================")
+print("TEST SUMMARY")
+print("========================================")
+
+print(
+    "SAP Print window :",
+    "FOUND" if found_print else "NOT FOUND"
+)
+
+print(
+    "PDF Error window :",
+    "FOUND" if found_error else "NOT FOUND"
+)
+
+print("========================================")

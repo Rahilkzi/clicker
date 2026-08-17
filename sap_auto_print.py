@@ -3,26 +3,37 @@ from pywinauto import Desktop
 
 
 # ============================================================
-# SAP AUTO PRINT
+# SAP AUTO PRINT AUTOMATION
 # ============================================================
 
 desktop = Desktop(backend="win32")
 
 CHECK_INTERVAL = 0.2
+ERROR_CHECK_INTERVAL = 0.2
+
+# Maximum time to wait after clicking Print
 PRINT_WAIT_TIMEOUT = 15
 
+# Small delay after handling a print/error dialog
+ACTION_DELAY = 0.5
+
+
+# ============================================================
+# STARTUP
+# ============================================================
 
 print()
-print("=" * 60)
-print("                 SAP AUTO PRINT")
-print("=" * 60)
+print("=" * 70)
+print("                    SAP AUTO PRINT")
+print("=" * 70)
 print()
-print("F8 / Ctrl+C to stop")
+print("Automation is running...")
+print("Press Ctrl+C to stop.")
 print()
 
 
 # ============================================================
-# FIND SAP PRINT WINDOW
+# FIND SAP PRINT WINDOWS
 # ============================================================
 
 def get_print_windows():
@@ -54,7 +65,7 @@ def get_print_windows():
 
 
 # ============================================================
-# FIND PDF ERROR WINDOW
+# FIND PDF ERROR WINDOWS
 # ============================================================
 
 def get_pdf_error_windows():
@@ -76,10 +87,15 @@ def get_pdf_error_windows():
 
         try:
 
+            if not dialog.is_visible():
+                continue
+
+
             title = dialog.window_text().strip()
 
+
             # ------------------------------------------------
-            # PDF error dialog identification
+            # PDF ERROR IDENTIFICATION
             #
             # Example:
             #
@@ -91,7 +107,7 @@ def get_pdf_error_windows():
 
 
             # ------------------------------------------------
-            # Make sure an OK button exists
+            # Find OK button
             # ------------------------------------------------
 
             ok_button = None
@@ -106,9 +122,13 @@ def get_pdf_error_windows():
 
                     try:
 
-                        text = button.window_text().strip()
+                        text = (
+                            button.window_text()
+                            .strip()
+                            .upper()
+                        )
 
-                        if text.upper() == "OK":
+                        if text == "OK":
 
                             ok_button = button
                             break
@@ -119,6 +139,10 @@ def get_pdf_error_windows():
             except Exception:
                 pass
 
+
+            # ------------------------------------------------
+            # Only accept dialog if OK button exists
+            # ------------------------------------------------
 
             if ok_button is not None:
 
@@ -134,20 +158,12 @@ def get_pdf_error_windows():
 
 
 # ============================================================
-# CLICK PRINT BUTTON
+# FIND PRINT BUTTON
 # ============================================================
 
-def click_print(print_window):
+def find_print_button(print_window):
 
     try:
-
-        # ----------------------------------------------------
-        # From your Window Spy:
-        #
-        # Print button = Button3
-        #
-        # pywinauto's descendant index corresponds to it.
-        # ----------------------------------------------------
 
         buttons = print_window.descendants(
             class_name="Button"
@@ -155,43 +171,139 @@ def click_print(print_window):
 
 
         print(
-            f"Found {len(buttons)} buttons in Print window"
+            f"Buttons found: {len(buttons)}"
         )
 
 
         # ----------------------------------------------------
-        # Button3 = index 3
+        # Your tested SAP Print dialog:
+        #
+        # [0] Button
+        # [1] Button  ← PRINT
+        # [2] Button
+        # [3] Button
+        #
+        # The Print button has:
+        #
+        # Text     = ''
+        # Position = approximately (443,619)
+        # Size     = approximately (100,20)
+        #
+        # Therefore we use BUTTON INDEX 1.
         # ----------------------------------------------------
 
-        if len(buttons) >= 4:
+        if len(buttons) >= 2:
 
-            print_button = buttons[3]
+            candidate = buttons[1]
 
-            print(
-                "Print button handle:",
-                print_button.handle
-            )
+            try:
 
-            print("Clicking PRINT...")
+                if candidate.is_visible():
 
-            # Windows control click.
-            # Does NOT move the mouse cursor.
-            print_button.click()
+                    return candidate
 
-            return True
+            except Exception:
+                pass
 
 
-        print(
-            "❌ Print button could not be identified."
-        )
-
-        return False
+        return None
 
 
     except Exception as e:
 
         print(
-            "❌ Print button error:",
+            "Print button detection error:",
+            repr(e)
+        )
+
+        return None
+
+
+# ============================================================
+# CLICK PRINT BUTTON
+# ============================================================
+
+def click_print(print_window):
+
+    try:
+
+        print()
+        print("----------------------------------------")
+        print("Finding PRINT button...")
+        print("----------------------------------------")
+
+
+        print_button = find_print_button(
+            print_window
+        )
+
+
+        if print_button is None:
+
+            print(
+                "❌ PRINT button could not be identified."
+            )
+
+            return False
+
+
+        # ----------------------------------------------------
+        # Display information
+        # ----------------------------------------------------
+
+        try:
+
+            print(
+                "Handle   :",
+                print_button.handle
+            )
+
+            print(
+                "Class    :",
+                print_button.class_name()
+            )
+
+            print(
+                "Text     :",
+                repr(print_button.window_text())
+            )
+
+            print(
+                "Position :",
+                print_button.rectangle()
+            )
+
+        except Exception:
+            pass
+
+
+        print()
+        print("Clicking PRINT button...")
+
+
+        # ----------------------------------------------------
+        # Use Windows control click.
+        #
+        # This does NOT depend on mouse coordinates.
+        # ----------------------------------------------------
+
+        print_button.click()
+
+
+        print("✓ PRINT button clicked successfully.")
+
+        return True
+
+
+    except Exception as e:
+
+        print()
+        print(
+            "❌ Could not click PRINT button."
+        )
+
+        print(
+            "Error:",
             repr(e)
         )
 
@@ -199,7 +311,7 @@ def click_print(print_window):
 
 
 # ============================================================
-# PRESS ERROR OK
+# CLOSE PDF ERROR
 # ============================================================
 
 def close_pdf_error(dialog, ok_button):
@@ -207,34 +319,55 @@ def close_pdf_error(dialog, ok_button):
     try:
 
         print()
-        print("========================================")
-        print("PDF ERROR DETECTED")
-        print("========================================")
+        print("=" * 70)
+        print("                  PDF ERROR DETECTED")
+        print("=" * 70)
+
 
         print(
-            "PDF dialog:",
+            "Dialog title:",
             repr(dialog.window_text())
         )
+
+
+        print(
+            "Dialog handle:",
+            dialog.handle
+        )
+
 
         print(
             "OK handle:",
             ok_button.handle
         )
 
-        print("Pressing OK...")
 
-        # Windows control click.
-        # Does NOT move the mouse.
+        print()
+        print("Clicking OK...")
+
+
+        # ----------------------------------------------------
+        # Click OK using Windows UI automation
+        # ----------------------------------------------------
+
         ok_button.click()
 
-        print("✓ Error dialog closed")
+
+        print("✓ PDF error closed.")
+
 
         return True
 
+
     except Exception as e:
 
+        print()
         print(
-            "❌ Error closing PDF dialog:",
+            "❌ Could not close PDF error."
+        )
+
+        print(
+            "Error:",
             repr(e)
         )
 
@@ -242,16 +375,131 @@ def close_pdf_error(dialog, ok_button):
 
 
 # ============================================================
-# MAIN LOOP
+# WAIT FOR PRINT RESULT
+# ============================================================
+
+def wait_after_print(print_window):
+
+    start_time = time.time()
+
+
+    print()
+    print("----------------------------------------")
+    print("Waiting for print result...")
+    print("----------------------------------------")
+
+
+    while (
+        time.time() - start_time
+        < PRINT_WAIT_TIMEOUT
+    ):
+
+        # ====================================================
+        # 1. CHECK PDF ERROR FIRST
+        # ====================================================
+
+        errors = get_pdf_error_windows()
+
+
+        if errors:
+
+            print()
+            print(
+                "PDF error window detected."
+            )
+
+
+            for dialog, ok_button in errors:
+
+                close_pdf_error(
+                    dialog,
+                    ok_button
+                )
+
+
+            # ------------------------------------------------
+            # Error handled.
+            #
+            # IMPORTANT:
+            # Do not immediately click Print again.
+            # Wait for SAP to move to the next item.
+            # ------------------------------------------------
+
+            time.sleep(
+                ACTION_DELAY
+            )
+
+            return "ERROR"
+
+
+        # ====================================================
+        # 2. CHECK WHETHER PRINT WINDOW CLOSED
+        # ====================================================
+
+        try:
+
+            if not print_window.exists():
+
+                print()
+                print(
+                    "✓ Print window closed."
+                )
+
+                return "SUCCESS"
+
+        except Exception:
+
+            # If the window handle is no longer valid,
+            # treat it as closed.
+
+            return "SUCCESS"
+
+
+        # ====================================================
+        # 3. CHECK AGAIN
+        # ====================================================
+
+        time.sleep(
+            ERROR_CHECK_INTERVAL
+        )
+
+
+    # ========================================================
+    # TIMEOUT
+    # ========================================================
+
+    print()
+    print(
+        "⚠ Print operation timed out."
+    )
+
+    return "TIMEOUT"
+
+
+# ============================================================
+# PROCESSED WINDOW TRACKING
+# ============================================================
+
+# ------------------------------------------------------------
+# This prevents the automation from clicking the SAME
+# Print dialog repeatedly if an error dialog appears while
+# the Print window remains open.
+# ------------------------------------------------------------
+
+processed_print_handles = set()
+
+
+# ============================================================
+# MAIN AUTOMATION LOOP
 # ============================================================
 
 while True:
 
     try:
 
-        # ----------------------------------------------------
-        # 1. CHECK FOR PDF ERROR FIRST
-        # ----------------------------------------------------
+        # ====================================================
+        # 1. PDF ERROR HAS HIGHEST PRIORITY
+        # ====================================================
 
         errors = get_pdf_error_windows()
 
@@ -265,14 +513,17 @@ while True:
                     ok_button
                 )
 
-            time.sleep(0.5)
+
+            time.sleep(
+                ACTION_DELAY
+            )
 
             continue
 
 
-        # ----------------------------------------------------
-        # 2. FIND PRINT WINDOW
-        # ----------------------------------------------------
+        # ====================================================
+        # 2. FIND SAP PRINT WINDOWS
+        # ====================================================
 
         print_windows = get_print_windows()
 
@@ -286,146 +537,217 @@ while True:
             continue
 
 
-        # ----------------------------------------------------
-        # 3. PRINT WINDOW FOUND
-        # ----------------------------------------------------
+        # ====================================================
+        # 3. PROCESS AVAILABLE PRINT WINDOWS
+        # ====================================================
 
-        print()
-        print("========================================")
-        print("PRINT WINDOW DETECTED")
-        print("========================================")
+        for print_window in print_windows:
 
-        print(
-            "Number of Print windows:",
-            len(print_windows)
-        )
+            try:
+
+                handle = print_window.handle
 
 
-        # ----------------------------------------------------
-        # Use the first visible Print window
-        # ----------------------------------------------------
+                # ------------------------------------------------
+                # Ignore a Print dialog already processed.
+                # ------------------------------------------------
 
-        print_window = print_windows[0]
+                if handle in processed_print_handles:
 
-
-        print(
-            "Handle:",
-            print_window.handle
-        )
-
-        print(
-            "PID:",
-            print_window.element_info.process_id
-        )
+                    continue
 
 
-        # ----------------------------------------------------
-        # 4. CLICK PRINT
-        # ----------------------------------------------------
+                # ------------------------------------------------
+                # Mark it immediately.
+                #
+                # This prevents repeated clicking if a PDF
+                # error appears and the Print window remains.
+                # ------------------------------------------------
 
-        clicked = click_print(
-            print_window
-        )
-
-
-        if not clicked:
-
-            print(
-                "Waiting for Print window..."
-            )
-
-            time.sleep(1)
-
-            continue
+                processed_print_handles.add(
+                    handle
+                )
 
 
-        # ----------------------------------------------------
-        # 5. AFTER PRINT CLICK
-        #
-        # Wait for either:
-        #
-        # A) PDF error appears
-        #
-        # OR
-        #
-        # B) Print window disappears
-        # ----------------------------------------------------
-
-        start_time = time.time()
+                print()
+                print("=" * 70)
+                print("                 PRINT WINDOW DETECTED")
+                print("=" * 70)
 
 
-        while (
-            time.time() - start_time
-            < PRINT_WAIT_TIMEOUT
-        ):
-
-            # -----------------------------------------------
-            # Check PDF error
-            # -----------------------------------------------
-
-            errors = get_pdf_error_windows()
+                print(
+                    "Handle:",
+                    handle
+                )
 
 
-            if errors:
+                try:
 
-                for dialog, ok_button in errors:
-
-                    close_pdf_error(
-                        dialog,
-                        ok_button
+                    print(
+                        "PID   :",
+                        print_window.element_info.process_id
                     )
 
-                break
+                except Exception:
+                    pass
 
 
-            # -----------------------------------------------
-            # Check whether Print window still exists
-            # -----------------------------------------------
+                print(
+                    "Title :",
+                    repr(
+                        print_window.window_text()
+                    )
+                )
 
-            current_print_windows = (
-                get_print_windows()
-            )
+
+                # =================================================
+                # 4. CLICK PRINT
+                # =================================================
+
+                clicked = click_print(
+                    print_window
+                )
 
 
-            if not current_print_windows:
+                if not clicked:
+
+                    print()
+                    print(
+                        "⚠ PRINT button was not clicked."
+                    )
+
+
+                    # Allow this window to be retried
+                    processed_print_handles.discard(
+                        handle
+                    )
+
+                    continue
+
+
+                # =================================================
+                # 5. WAIT FOR RESULT
+                # =================================================
+
+                result = wait_after_print(
+                    print_window
+                )
+
+
+                # =================================================
+                # RESULT
+                # =================================================
+
+                if result == "SUCCESS":
+
+                    print()
+                    print(
+                        "✓ PRINT COMPLETED."
+                    )
+
+
+                elif result == "ERROR":
+
+                    print()
+                    print(
+                        "✓ PDF ERROR HANDLED."
+                    )
+
+
+                elif result == "TIMEOUT":
+
+                    print()
+                    print(
+                        "⚠ PRINT RESULT TIMEOUT."
+                    )
+
 
                 print()
                 print(
-                    "✓ Print window closed."
+                    "Waiting for next SAP print..."
                 )
 
-                break
+
+                time.sleep(
+                    ACTION_DELAY
+                )
 
 
-            time.sleep(
-                CHECK_INTERVAL
-            )
+            except Exception as e:
 
+                print()
+                print(
+                    "Print window processing error:",
+                    repr(e)
+                )
+
+                continue
+
+
+        # ====================================================
+        # 6. CLEAN OLD HANDLES
+        # ====================================================
 
         # ----------------------------------------------------
-        # Small delay before checking for next SAP item
+        # Remove handles that no longer exist.
+        #
+        # This allows Windows to reuse handles safely.
         # ----------------------------------------------------
 
-        time.sleep(0.5)
+        current_handles = set()
 
+        for window in print_windows:
+
+            try:
+
+                current_handles.add(
+                    window.handle
+                )
+
+            except Exception:
+                pass
+
+
+        processed_print_handles.intersection_update(
+            current_handles
+        )
+
+
+        time.sleep(
+            CHECK_INTERVAL
+        )
+
+
+    # ========================================================
+    # CTRL+C
+    # ========================================================
 
     except KeyboardInterrupt:
 
         print()
         print()
-        print("=" * 60)
-        print("SAP AUTO PRINT STOPPED")
-        print("=" * 60)
+        print("=" * 70)
+        print("                 SAP AUTO PRINT STOPPED")
+        print("=" * 70)
+        print()
 
         break
 
+
+    # ========================================================
+    # UNEXPECTED ERROR
+    # ========================================================
 
     except Exception as e:
 
         print()
         print(
-            "Main loop error:",
+            "Main automation error:",
             repr(e)
+        )
+
+        print(
+            "Automation will continue..."
         )
 
         time.sleep(1)

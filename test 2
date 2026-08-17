@@ -1,286 +1,277 @@
 from pywinauto import Desktop
-import time
 
 
 # ============================================================
-# SAP UI AUTOMATION TEST
+# SAP UI AUTOMATION - WINDOW DETECTION TEST
 # ============================================================
 
 desktop = Desktop(backend="win32")
 
-TARGET_ERROR_TEXT = (
-    "This file does not have an app associated with it"
-)
-
-SAP_PROCESS_NAME = "saplogon.exe"
+ERROR_TEXT = "This file does not have an app associated with it"
 
 
-def safe_text(control):
-    """Safely get text from a window/control."""
+def get_text(control):
     try:
         return control.window_text().strip()
     except Exception:
         return ""
 
 
-def get_process_name(window):
-    """Safely get process name."""
-    try:
-        return window.element_info.process_id
-    except Exception:
-        return None
-
-
-def control_contains_error(window):
-    """
-    Check all controls inside a dialog for the
-    Windows PDF association error.
-    """
-
-    # Check window title itself
-    title = safe_text(window)
-
-    if TARGET_ERROR_TEXT.lower() in title.lower():
-        return True
-
-    # Check every child control
-    try:
-        controls = window.descendants()
-    except Exception:
-        return False
-
-    for control in controls:
-
-        text = safe_text(control)
-
-        if not text:
-            continue
-
-        if TARGET_ERROR_TEXT.lower() in text.lower():
-            return True
-
-    return False
+print()
+print("=" * 60)
+print("                 SAP UI AUTOMATION TEST")
+print("=" * 60)
 
 
 # ============================================================
-# HEADER
+# 1. FIND PRINT WINDOWS
 # ============================================================
 
 print()
-print("=" * 55)
-print("              SAP UI AUTOMATION TEST")
-print("=" * 55)
-print()
-
-
-# ============================================================
-# FIND SAP PRINT WINDOWS
-# ============================================================
-
-print("=" * 15, "SAP PRINT WINDOWS", "=" * 15)
+print("=" * 20)
+print("SAP PRINT WINDOWS")
+print("=" * 20)
 print()
 
 print_windows = []
 
 try:
-    all_windows = desktop.windows(visible_only=True)
-except Exception:
-    all_windows = []
+    windows = desktop.windows(visible_only=True)
+except Exception as e:
+    print("Could not enumerate windows:", e)
+    windows = []
 
 
-for window in all_windows:
+for window in windows:
 
     try:
-        title = safe_text(window)
-        class_name = window.class_name()
+
+        title = get_text(window)
 
         if title == "Print:":
-
-            pid = window.element_info.process_id
 
             print_windows.append(window)
 
             print("WINDOW")
             print("Title  :", repr(title))
-            print("Class  :", repr(class_name))
+            print("Class  :", window.class_name())
             print("Handle :", window.handle)
-            print("PID    :", pid)
+            print("PID    :", window.element_info.process_id)
 
             print()
             print("--- BUTTONS ---")
 
             try:
+
                 buttons = window.descendants(class_name="Button")
 
                 for i, button in enumerate(buttons):
 
                     try:
+
                         print(
                             f"[{i}] "
                             f"text={button.window_text()!r} "
                             f"class={button.class_name()!r} "
                             f"handle={button.handle}"
                         )
+
                     except Exception:
                         pass
 
             except Exception as e:
-                print("Could not read buttons:", e)
+
+                print("Button scan error:", e)
 
             print()
-            print("-" * 55)
-            print()
+            print("-" * 60)
 
-    except Exception:
-        pass
-
-
-# ============================================================
-# PRINT WINDOW RESULT
-# ============================================================
 
 if print_windows:
 
-    print(
-        f"✓ SAP Print window found: "
-        f"{len(print_windows)}"
-    )
+    print()
+    print("✓ SAP Print window FOUND")
 
 else:
 
+    print()
     print("❌ SAP Print window NOT FOUND")
 
 
 # ============================================================
-# FIND WINDOWS ERROR DIALOGS
+# 2. FIND ALL WINDOWS WITH CLASS #32770
 # ============================================================
 
 print()
-print("=" * 15, "SAP ERROR WINDOWS", "=" * 15)
+print("=" * 20)
+print("WINDOWS CLASS #32770")
+print("=" * 20)
 print()
 
+
+dialogs = []
+
+try:
+
+    dialogs = desktop.windows(
+        class_name="#32770",
+        visible_only=True
+    )
+
+except Exception as e:
+
+    print("Dialog enumeration error:", e)
+
+
+print("Total #32770 dialogs found:", len(dialogs))
+print()
+
+
+# ============================================================
+# 3. INSPECT EVERY #32770 DIALOG
+# ============================================================
 
 error_windows = []
 
 
-for window in all_windows:
+for number, dialog in enumerate(dialogs, start=1):
 
     try:
 
-        # Windows standard dialog class
-        if window.class_name() != "#32770":
-            continue
+        title = get_text(dialog)
 
-        title = safe_text(window)
+        print("=" * 60)
+        print(f"DIALOG #{number}")
+        print("=" * 60)
 
-        # Only inspect dialogs that belong to SAP
-        pid = window.element_info.process_id
+        print("Title  :", repr(title))
+        print("Class  :", repr(dialog.class_name()))
+        print("Handle :", dialog.handle)
 
-        # If we have a Print window, prioritize dialogs
-        # belonging to the same SAP process.
-        same_sap_process = False
+        try:
+            print(
+                "PID    :",
+                dialog.element_info.process_id
+            )
+        except Exception:
+            pass
 
-        for print_window in print_windows:
+        print()
+        print("--- CONTROLS ---")
 
-            try:
+        found_error = False
 
-                print_pid = print_window.element_info.process_id
+        try:
 
-                if pid == print_pid:
-                    same_sap_process = True
-                    break
+            controls = dialog.descendants()
 
-            except Exception:
-                pass
+            for i, control in enumerate(controls):
 
-        if not same_sap_process:
-            continue
+                try:
 
-        # Check actual dialog contents
-        if control_contains_error(window):
-
-            error_windows.append(window)
-
-            print("✓ TARGET PDF ERROR WINDOW FOUND")
-            print()
-            print("Title  :", repr(title))
-            print("Class  :", repr(window.class_name()))
-            print("Handle :", window.handle)
-            print("PID    :", pid)
-
-            print()
-            print("--- CONTROLS ---")
-
-            try:
-
-                for i, control in enumerate(window.descendants()):
-
-                    text = safe_text(control)
+                    text = get_text(control)
 
                     if text:
 
-                        try:
-                            print(
-                                f"[{i}] "
-                                f"text={text!r} "
-                                f"class={control.class_name()!r} "
-                                f"handle={control.handle}"
-                            )
-                        except Exception:
-                            pass
+                        class_name = control.class_name()
 
-            except Exception:
-                pass
+                        print(
+                            f"[{i}] "
+                            f"text={text!r} "
+                            f"class={class_name!r} "
+                            f"handle={control.handle}"
+                        )
+
+                        # ------------------------------------
+                        # CHECK ERROR TEXT
+                        # ------------------------------------
+
+                        if ERROR_TEXT.lower() in text.lower():
+
+                            found_error = True
+
+                except Exception:
+                    pass
+
+        except Exception as e:
+
+            print("Control scan error:", e)
+
+
+        # ====================================================
+        # ALSO CHECK THE DIALOG TITLE
+        # ====================================================
+
+        if ERROR_TEXT.lower() in title.lower():
+
+            found_error = True
+
+
+        # ====================================================
+        # ERROR FOUND
+        # ====================================================
+
+        if found_error:
+
+            error_windows.append(dialog)
 
             print()
-            print("-" * 55)
+            print(">>> ✓ PDF ERROR WINDOW DETECTED <<<")
             print()
+            print(
+                "Error text detected:"
+            )
+            print(
+                ERROR_TEXT
+            )
 
-    except Exception:
-        pass
+        else:
+
+            print()
+            print("Not the PDF error dialog.")
+
+        print()
+
+
+    except Exception as e:
+
+        print(
+            f"Error inspecting dialog #{number}:",
+            e
+        )
 
 
 # ============================================================
-# ERROR RESULT
+# 4. FINAL RESULT
 # ============================================================
+
+print()
+print("=" * 60)
+print("                    TEST SUMMARY")
+print("=" * 60)
+print()
+
+
+if print_windows:
+
+    print("SAP Print window : FOUND")
+
+else:
+
+    print("SAP Print window : NOT FOUND")
+
 
 if error_windows:
 
     print(
-        f"✓ PDF Error window found: "
-        f"{len(error_windows)}"
+        "PDF Error window : FOUND"
+        f" ({len(error_windows)} dialog)"
     )
 
 else:
 
-    print("❌ PDF Error window NOT FOUND")
-
-    print()
-    print("The test looks for this text:")
-    print()
-    print(TARGET_ERROR_TEXT)
-
-
-# ============================================================
-# FINAL SUMMARY
-# ============================================================
-
-print()
-print("=" * 55)
-print("                    TEST SUMMARY")
-print("=" * 55)
-
-print()
-
-if print_windows:
-    print("SAP Print window : FOUND")
-else:
-    print("SAP Print window : NOT FOUND")
-
-if error_windows:
-    print("PDF Error window : FOUND")
-else:
     print("PDF Error window : NOT FOUND")
 
+
 print()
-print("=" * 55)
+print("=" * 60)

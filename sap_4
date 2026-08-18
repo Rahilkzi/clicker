@@ -23,10 +23,8 @@ desktop = Desktop(backend="win32")
 CHECK_INTERVAL = 0.2
 ERROR_CHECK_INTERVAL = 0.2
 
-# Maximum time to wait after clicking Print
 PRINT_WAIT_TIMEOUT = 15
 
-# Small delay after Print/Error handling
 ACTION_DELAY = 0.5
 
 
@@ -59,7 +57,6 @@ shutdown_requested = False
 state_lock = threading.Lock()
 hotkey_lock = threading.Lock()
 
-# Current F8 hotkey registration
 f8_hotkey = None
 
 
@@ -156,7 +153,7 @@ def register_f8():
         try:
 
             # ------------------------------------------------
-            # Remove previous F8 hook
+            # Remove old F8 hook
             # ------------------------------------------------
 
             if f8_hotkey is not None:
@@ -182,7 +179,7 @@ def register_f8():
 
 
             # ------------------------------------------------
-            # Register a fresh F8 hook
+            # Register new F8 hook
             # ------------------------------------------------
 
             f8_hotkey = keyboard.add_hotkey(
@@ -211,7 +208,7 @@ def register_f8():
 
 
 # ============================================================
-# WINDOWS SESSION CHANGE CONSTANTS
+# WINDOWS SESSION CONSTANTS
 # ============================================================
 
 WM_WTSSESSION_CHANGE = 0x02B1
@@ -243,30 +240,28 @@ kernel32 = ctypes.WinDLL(
 
 
 # ============================================================
-# WINDOWS API FUNCTION TYPES
+# WINDOWS API DEFINITIONS
 # ============================================================
 
 # ------------------------------------------------------------
-# Pointer-sized Windows types.
+# IMPORTANT:
 #
-# Important for 64-bit Windows + Python 3.12.
+# Do NOT use wintypes.LPARAM / WPARAM here.
+#
+# Python 3.12 + 64-bit Windows can produce an overflow when
+# Windows calls the Python callback with the LPARAM value.
+#
+# We therefore receive both values as void pointers.
 # ------------------------------------------------------------
 
-LRESULT = ctypes.c_int64
-WPARAM = ctypes.c_uint64
-LPARAM = ctypes.c_int64
-
-
-# ------------------------------------------------------------
-# Window procedure callback
-# ------------------------------------------------------------
+LRESULT = ctypes.c_ssize_t
 
 WNDPROC = ctypes.WINFUNCTYPE(
     LRESULT,
     ctypes.c_void_p,       # HWND
     ctypes.c_uint32,       # UINT
-    WPARAM,                # WPARAM
-    LPARAM                 # LPARAM
+    ctypes.c_void_p,       # WPARAM
+    ctypes.c_void_p        # LPARAM
 )
 
 
@@ -283,17 +278,38 @@ def session_window_proc(
 
     try:
 
+        # ----------------------------------------------------
+        # Convert WPARAM safely.
+        #
+        # WPARAM contains the session event number.
+        # ----------------------------------------------------
+
+        try:
+
+            event = ctypes.cast(
+                wparam,
+                ctypes.c_void_p
+            ).value
+
+        except Exception:
+
+            try:
+                event = int(wparam)
+            except Exception:
+                event = 0
+
+
         # ====================================================
-        # WINDOWS SESSION CHANGE
+        # SESSION CHANGE
         # ====================================================
 
         if msg == WM_WTSSESSION_CHANGE:
 
             # ------------------------------------------------
-            # WINDOWS LOCKED
+            # LOCK
             # ------------------------------------------------
 
-            if wparam == WTS_SESSION_LOCK:
+            if event == WTS_SESSION_LOCK:
 
                 log(
                     "WINDOWS SESSION LOCKED"
@@ -301,10 +317,10 @@ def session_window_proc(
 
 
             # ------------------------------------------------
-            # WINDOWS UNLOCKED
+            # UNLOCK
             # ------------------------------------------------
 
-            elif wparam == WTS_SESSION_UNLOCK:
+            elif event == WTS_SESSION_UNLOCK:
 
                 log(
                     "WINDOWS SESSION UNLOCKED"
@@ -312,17 +328,14 @@ def session_window_proc(
 
 
                 # --------------------------------------------
-                # Give Windows time to restore the desktop
+                # Give Windows time to restore the interactive
+                # session after unlocking.
                 # --------------------------------------------
 
                 time.sleep(
-                    1.0
+                    1.5
                 )
 
-
-                # --------------------------------------------
-                # Re-register F8
-                # --------------------------------------------
 
                 log(
                     "Re-registering F8 after Windows unlock..."
@@ -351,16 +364,16 @@ def session_window_proc(
                     )
 
 
-        # ====================================================
-        # Pass message to Windows
-        # ====================================================
+        # ----------------------------------------------------
+        # IMPORTANT:
+        #
+        # Return 0 directly.
+        #
+        # We intentionally do NOT call DefWindowProcW here.
+        # That avoids another LPARAM conversion.
+        # ----------------------------------------------------
 
-        return user32.DefWindowProcW(
-            hwnd,
-            msg,
-            wparam,
-            lparam
-        )
+        return 0
 
 
     except Exception as e:
@@ -370,19 +383,7 @@ def session_window_proc(
             + repr(e)
         )
 
-
-        try:
-
-            return user32.DefWindowProcW(
-                hwnd,
-                msg,
-                wparam,
-                lparam
-            )
-
-        except Exception:
-
-            return 0
+        return 0
 
 
 # ============================================================
@@ -399,7 +400,7 @@ def session_monitor():
     try:
 
         # ====================================================
-        # GET CURRENT MODULE HANDLE
+        # GET MODULE HANDLE
         # ====================================================
 
         kernel32.GetModuleHandleW.argtypes = [
@@ -490,7 +491,10 @@ def session_monitor():
         # UNIQUE WINDOW CLASS NAME
         # ====================================================
 
-        process_id = kernel32.GetCurrentProcessId()
+        process_id = (
+            kernel32.GetCurrentProcessId()
+        )
+
 
         class_name = (
             "SAPAutoPrintSessionMonitor_"
@@ -501,6 +505,15 @@ def session_monitor():
         # ====================================================
         # CREATE WINDOW CLASS
         # ====================================================
+
+        user32.RegisterClassW.argtypes = [
+            ctypes.POINTER(WNDCLASS)
+        ]
+
+        user32.RegisterClassW.restype = (
+            wintypes.ATOM
+        )
+
 
         wnd_class = WNDCLASS()
 
@@ -514,6 +527,13 @@ def session_monitor():
 
         wnd_class.hInstance = h_instance
 
+        # ----------------------------------------------------
+        # Do NOT use HICON / HCURSOR / HBRUSH.
+        #
+        # Python 3.12 wintypes does not consistently expose
+        # those names.
+        # ----------------------------------------------------
+
         wnd_class.hIcon = None
 
         wnd_class.hCursor = None
@@ -525,19 +545,6 @@ def session_monitor():
         wnd_class.lpszClassName = class_name
 
 
-        # ====================================================
-        # REGISTER WINDOW CLASS
-        # ====================================================
-
-        user32.RegisterClassW.argtypes = [
-            ctypes.POINTER(WNDCLASS)
-        ]
-
-        user32.RegisterClassW.restype = (
-            wintypes.ATOM
-        )
-
-
         atom = user32.RegisterClassW(
             ctypes.byref(wnd_class)
         )
@@ -547,42 +554,49 @@ def session_monitor():
 
             error = ctypes.get_last_error()
 
-            log(
-                f"Could not register session window. "
-                f"Error={error}"
-            )
+            # Error 1410 = class already exists.
+            # That is harmless for our purposes.
 
-            return
+            if error != 1410:
+
+                log(
+                    f"Could not register session window class. "
+                    f"Error={error}"
+                )
+
+                return
 
 
         # ====================================================
-        # CREATE MESSAGE-ONLY WINDOW
+        # CREATE HIDDEN WINDOW
         # ====================================================
-
-        HWND_MESSAGE = ctypes.c_void_p(
-            -3
-        )
-
 
         user32.CreateWindowExW.argtypes = [
-            wintypes.DWORD,
-            wintypes.LPCWSTR,
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p
+            wintypes.DWORD,       # dwExStyle
+            wintypes.LPCWSTR,     # lpClassName
+            wintypes.LPCWSTR,     # lpWindowName
+            wintypes.DWORD,       # dwStyle
+            ctypes.c_int,         # X
+            ctypes.c_int,         # Y
+            ctypes.c_int,         # Width
+            ctypes.c_int,         # Height
+            ctypes.c_void_p,      # hWndParent
+            ctypes.c_void_p,      # hMenu
+            ctypes.c_void_p,      # hInstance
+            ctypes.c_void_p       # lpParam
         ]
 
         user32.CreateWindowExW.restype = (
             ctypes.c_void_p
         )
 
+
+        # ----------------------------------------------------
+        # Normal hidden window.
+        #
+        # No HWND_MESSAGE.
+        # No negative pointer.
+        # ----------------------------------------------------
 
         hwnd = user32.CreateWindowExW(
             0,
@@ -593,7 +607,7 @@ def session_monitor():
             0,
             0,
             0,
-            HWND_MESSAGE,
+            None,
             None,
             h_instance,
             None
@@ -612,8 +626,13 @@ def session_monitor():
             return
 
 
+        log(
+            "Session monitor window created successfully."
+        )
+
+
         # ====================================================
-        # REGISTER SESSION NOTIFICATIONS
+        # REGISTER WINDOWS SESSION NOTIFICATION
         # ====================================================
 
         wtsapi32.WTSRegisterSessionNotification.argtypes = [
@@ -639,7 +658,7 @@ def session_monitor():
             error = ctypes.get_last_error()
 
             log(
-                f"Could not register WTS notification. "
+                "Could not register WTS session notification. "
                 f"Error={error}"
             )
 
@@ -663,7 +682,7 @@ def session_monitor():
 
 
         # ====================================================
-        # WINDOWS MESSAGE LOOP
+        # MESSAGE LOOP
         # ====================================================
 
         user32.GetMessageW.argtypes = [
@@ -674,7 +693,7 @@ def session_monitor():
         ]
 
         user32.GetMessageW.restype = (
-            wintypes.BOOL
+            ctypes.c_int
         )
 
 
@@ -703,7 +722,7 @@ def session_monitor():
 
             result = user32.GetMessageW(
                 ctypes.byref(msg),
-                hwnd,
+                None,
                 0,
                 0
             )
@@ -714,8 +733,8 @@ def session_monitor():
                 error = ctypes.get_last_error()
 
                 log(
-                    f"Session monitor GetMessage error: "
-                    f"{error}"
+                    "Session monitor GetMessage error: "
+                    + str(error)
                 )
 
                 break
@@ -867,10 +886,6 @@ def get_pdf_error_windows():
 
             # ------------------------------------------------
             # PDF ERROR IDENTIFICATION
-            #
-            # Example:
-            #
-            # C:\temp\0999324283.pdf
             # ------------------------------------------------
 
             if not title.lower().endswith(".pdf"):
@@ -1060,10 +1075,6 @@ def click_print(print_window):
         )
 
 
-        # ----------------------------------------------------
-        # WINDOWS UI AUTOMATION CLICK
-        # ----------------------------------------------------
-
         print_button.click()
 
 
@@ -1121,10 +1132,6 @@ def close_pdf_error(
             "Clicking OK..."
         )
 
-
-        # ----------------------------------------------------
-        # UI AUTOMATION CLICK
-        # ----------------------------------------------------
 
         ok_button.click()
 
@@ -1213,12 +1220,11 @@ def wait_after_print(print_window):
 
         except Exception:
 
-            # Window handle is no longer valid.
             return "SUCCESS"
 
 
         # ====================================================
-        # WAIT A LITTLE
+        # WAIT
         # ====================================================
 
         time.sleep(
@@ -1259,7 +1265,7 @@ register_f8()
 
 
 # ============================================================
-# START WINDOWS SESSION MONITOR
+# START SESSION MONITOR
 # ============================================================
 
 session_thread = threading.Thread(
@@ -1350,7 +1356,7 @@ while not shutdown_requested:
             try:
 
                 # --------------------------------------------
-                # Check F8 state before processing
+                # Check F8 state
                 # --------------------------------------------
 
                 if not automation_running:
@@ -1415,9 +1421,6 @@ while not shutdown_requested:
                     )
 
 
-                    # Don't remember this window.
-                    # It can be tried again.
-
                     time.sleep(
                         0.5
                     )
@@ -1426,7 +1429,7 @@ while not shutdown_requested:
 
 
                 # =================================================
-                # WAIT FOR THIS PRINT OPERATION
+                # WAIT FOR PRINT RESULT
                 # =================================================
 
                 result = wait_after_print(
@@ -1473,10 +1476,7 @@ while not shutdown_requested:
                 )
 
 
-                # --------------------------------------------
-                # Process one Print dialog per polling cycle.
-                # --------------------------------------------
-
+                # Process one print window per cycle.
                 break
 
 

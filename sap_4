@@ -23,8 +23,10 @@ desktop = Desktop(backend="win32")
 CHECK_INTERVAL = 0.2
 ERROR_CHECK_INTERVAL = 0.2
 
+# Maximum time to wait after clicking Print
 PRINT_WAIT_TIMEOUT = 15
 
+# Small delay after Print/Error handling
 ACTION_DELAY = 0.5
 
 
@@ -57,6 +59,7 @@ shutdown_requested = False
 state_lock = threading.Lock()
 hotkey_lock = threading.Lock()
 
+# Stores the currently registered F8 hotkey
 f8_hotkey = None
 
 
@@ -135,7 +138,7 @@ def toggle_automation():
 
 
 # ============================================================
-# REGISTER F8 HOTKEY
+# REGISTER / RE-REGISTER F8 HOTKEY
 # ============================================================
 
 def register_f8():
@@ -147,7 +150,7 @@ def register_f8():
         try:
 
             # ------------------------------------------------
-            # Remove previous F8 hook
+            # Remove previous F8 hook if it exists
             # ------------------------------------------------
 
             if f8_hotkey is not None:
@@ -158,14 +161,22 @@ def register_f8():
                         f8_hotkey
                     )
 
-                except Exception:
-                    pass
+                    log(
+                        "Previous F8 hotkey removed."
+                    )
+
+                except Exception as e:
+
+                    log(
+                        "Could not remove previous F8 hotkey: "
+                        + repr(e)
+                    )
 
                 f8_hotkey = None
 
 
             # ------------------------------------------------
-            # Register fresh F8 hook
+            # Register a fresh F8 hook
             # ------------------------------------------------
 
             f8_hotkey = keyboard.add_hotkey(
@@ -178,7 +189,6 @@ def register_f8():
                 "F8 hotkey registered successfully."
             )
 
-
             return True
 
 
@@ -189,11 +199,13 @@ def register_f8():
                 + repr(e)
             )
 
+            f8_hotkey = None
+
             return False
 
 
 # ============================================================
-# WINDOWS SESSION UNLOCK DETECTION
+# WINDOWS SESSION CHANGE CONSTANTS
 # ============================================================
 
 WM_WTSSESSION_CHANGE = 0x02B1
@@ -204,12 +216,17 @@ WTS_SESSION_UNLOCK = 0x8
 NOTIFY_FOR_THIS_SESSION = 0
 
 
+# ============================================================
+# WINDOWS API
+# ============================================================
+
 user32 = ctypes.windll.user32
 wtsapi32 = ctypes.windll.wtsapi32
+kernel32 = ctypes.windll.kernel32
 
 
 # ============================================================
-# SESSION WINDOW CALLBACK
+# WINDOWS MESSAGE PROCEDURE TYPE
 # ============================================================
 
 WNDPROC = ctypes.WINFUNCTYPE(
@@ -220,6 +237,10 @@ WNDPROC = ctypes.WINFUNCTYPE(
     wintypes.LPARAM
 )
 
+
+# ============================================================
+# SESSION WINDOW PROCEDURE
+# ============================================================
 
 def session_window_proc(
     hwnd,
@@ -237,7 +258,7 @@ def session_window_proc(
         if msg == WM_WTSSESSION_CHANGE:
 
             # ------------------------------------------------
-            # WORKSTATION LOCK
+            # WINDOWS LOCKED
             # ------------------------------------------------
 
             if wparam == WTS_SESSION_LOCK:
@@ -248,7 +269,7 @@ def session_window_proc(
 
 
             # ------------------------------------------------
-            # WORKSTATION UNLOCK
+            # WINDOWS UNLOCKED
             # ------------------------------------------------
 
             elif wparam == WTS_SESSION_UNLOCK:
@@ -259,10 +280,10 @@ def session_window_proc(
 
 
                 # --------------------------------------------
-                # Give Windows a moment to restore the desktop
+                # Give Windows time to restore the session
                 # --------------------------------------------
 
-                time.sleep(0.5)
+                time.sleep(1.0)
 
 
                 # --------------------------------------------
@@ -270,7 +291,7 @@ def session_window_proc(
                 # --------------------------------------------
 
                 log(
-                    "Re-registering F8 after unlock..."
+                    "Re-registering F8 after Windows unlock..."
                 )
 
 
@@ -284,9 +305,13 @@ def session_window_proc(
                     )
 
 
+                    # ----------------------------------------
+                    # Notification
+                    # ----------------------------------------
+
                     show_notification(
                         "SAP Auto Print",
-                        "Windows unlocked — F8 restored"
+                        "Windows unlocked - F8 restored"
                     )
 
                 else:
@@ -343,14 +368,17 @@ def session_monitor():
 
 
         # ====================================================
-        # CREATE UNIQUE WINDOW CLASS NAME
+        # UNIQUE WINDOW CLASS NAME
         # ====================================================
 
+        process_id = (
+            kernel32.GetCurrentProcessId()
+        )
+
+
         class_name = (
-            "SAPAutoPrintSessionMonitor"
-            + str(
-                ctypes.windll.kernel32.GetCurrentProcessId()
-            )
+            "SAPAutoPrintSessionMonitor_"
+            + str(process_id)
         )
 
 
@@ -415,6 +443,7 @@ def session_monitor():
             ]
 
 
+        # Keep callback alive
         wnd_proc = WNDPROC(
             session_window_proc
         )
@@ -470,6 +499,7 @@ def session_monitor():
 
         HWND_MESSAGE = wintypes.HWND(-3)
 
+
         hwnd = user32.CreateWindowExW(
             0,
             class_name,
@@ -499,12 +529,14 @@ def session_monitor():
 
 
         # ====================================================
-        # REGISTER FOR SESSION NOTIFICATIONS
+        # REGISTER WINDOWS SESSION NOTIFICATION
         # ====================================================
 
-        result = wtsapi32.WTSRegisterSessionNotification(
-            hwnd,
-            NOTIFY_FOR_THIS_SESSION
+        result = (
+            wtsapi32.WTSRegisterSessionNotification(
+                hwnd,
+                NOTIFY_FOR_THIS_SESSION
+            )
         )
 
 
@@ -517,7 +549,9 @@ def session_monitor():
                 f"Error={error}"
             )
 
-            user32.DestroyWindow(hwnd)
+            user32.DestroyWindow(
+                hwnd
+            )
 
             return
 
@@ -606,13 +640,6 @@ def session_monitor():
 
 
 # ============================================================
-# KERNEL32
-# ============================================================
-
-kernel32 = ctypes.windll.kernel32
-
-
-# ============================================================
 # FIND SAP PRINT WINDOWS
 # ============================================================
 
@@ -696,6 +723,10 @@ def get_pdf_error_windows():
 
             # ------------------------------------------------
             # PDF ERROR IDENTIFICATION
+            #
+            # Example:
+            #
+            # C:\temp\0999324283.pdf
             # ------------------------------------------------
 
             if not title.lower().endswith(".pdf"):
@@ -785,7 +816,9 @@ def find_print_button(print_window):
 
 
         # ----------------------------------------------------
-        # TESTED SAP PRINT DIALOG
+        # YOUR TESTED SAP PRINT DIALOG
+        #
+        # [2] = PRINT button
         # ----------------------------------------------------
 
         if len(buttons) >= 3:
@@ -884,7 +917,7 @@ def click_print(print_window):
 
 
         # ----------------------------------------------------
-        # UI AUTOMATION CLICK
+        # WINDOWS UI AUTOMATION CLICK
         # ----------------------------------------------------
 
         print_button.click()
@@ -1036,11 +1069,12 @@ def wait_after_print(print_window):
 
         except Exception:
 
+            # Window handle is no longer valid.
             return "SUCCESS"
 
 
         # ====================================================
-        # WAIT
+        # WAIT A LITTLE
         # ====================================================
 
         time.sleep(
@@ -1065,7 +1099,7 @@ def wait_after_print(print_window):
 # ============================================================
 
 log(
-    "=" * 70
+    "=" * 60
 )
 
 log(
@@ -1185,6 +1219,7 @@ while not shutdown_requested:
 
                 log("=" * 60)
 
+
                 log(
                     "PRINT WINDOW DETECTED"
                 )
@@ -1205,7 +1240,6 @@ while not shutdown_requested:
                             .process_id
                         )
                     )
-
 
                 except Exception:
                     pass
@@ -1235,16 +1269,18 @@ while not shutdown_requested:
                     )
 
 
+                    # Don't remember this window.
+                    # It can be tried again.
+
                     time.sleep(
                         0.5
                     )
-
 
                     continue
 
 
                 # =================================================
-                # WAIT FOR PRINT RESULT
+                # WAIT FOR THIS PRINT OPERATION
                 # =================================================
 
                 result = wait_after_print(

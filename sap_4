@@ -156,7 +156,7 @@ def register_f8():
         try:
 
             # ------------------------------------------------
-            # Remove old F8 registration
+            # Remove previous F8 hook
             # ------------------------------------------------
 
             if f8_hotkey is not None:
@@ -182,7 +182,7 @@ def register_f8():
 
 
             # ------------------------------------------------
-            # Register fresh F8
+            # Register a fresh F8 hook
             # ------------------------------------------------
 
             f8_hotkey = keyboard.add_hotkey(
@@ -243,17 +243,30 @@ kernel32 = ctypes.WinDLL(
 
 
 # ============================================================
-# WINDOWS API TYPES
+# WINDOWS API FUNCTION TYPES
 # ============================================================
 
-LRESULT = ctypes.c_ssize_t
+# ------------------------------------------------------------
+# Pointer-sized Windows types.
+#
+# Important for 64-bit Windows + Python 3.12.
+# ------------------------------------------------------------
+
+LRESULT = ctypes.c_int64
+WPARAM = ctypes.c_uint64
+LPARAM = ctypes.c_int64
+
+
+# ------------------------------------------------------------
+# Window procedure callback
+# ------------------------------------------------------------
 
 WNDPROC = ctypes.WINFUNCTYPE(
     LRESULT,
-    wintypes.HWND,
-    wintypes.UINT,
-    wintypes.WPARAM,
-    wintypes.LPARAM
+    ctypes.c_void_p,       # HWND
+    ctypes.c_uint32,       # UINT
+    WPARAM,                # WPARAM
+    LPARAM                 # LPARAM
 )
 
 
@@ -299,7 +312,7 @@ def session_window_proc(
 
 
                 # --------------------------------------------
-                # Give Windows time to restore the session
+                # Give Windows time to restore the desktop
                 # --------------------------------------------
 
                 time.sleep(
@@ -338,6 +351,10 @@ def session_window_proc(
                     )
 
 
+        # ====================================================
+        # Pass message to Windows
+        # ====================================================
+
         return user32.DefWindowProcW(
             hwnd,
             msg,
@@ -354,12 +371,18 @@ def session_window_proc(
         )
 
 
-        return user32.DefWindowProcW(
-            hwnd,
-            msg,
-            wparam,
-            lparam
-        )
+        try:
+
+            return user32.DefWindowProcW(
+                hwnd,
+                msg,
+                wparam,
+                lparam
+            )
+
+        except Exception:
+
+            return 0
 
 
 # ============================================================
@@ -376,8 +399,17 @@ def session_monitor():
     try:
 
         # ====================================================
-        # GET MODULE HANDLE
+        # GET CURRENT MODULE HANDLE
         # ====================================================
+
+        kernel32.GetModuleHandleW.argtypes = [
+            wintypes.LPCWSTR
+        ]
+
+        kernel32.GetModuleHandleW.restype = (
+            ctypes.c_void_p
+        )
+
 
         h_instance = kernel32.GetModuleHandleW(
             None
@@ -414,7 +446,7 @@ def session_monitor():
 
                 (
                     "hInstance",
-                    wintypes.HINSTANCE
+                    ctypes.c_void_p
                 ),
 
                 (
@@ -458,10 +490,7 @@ def session_monitor():
         # UNIQUE WINDOW CLASS NAME
         # ====================================================
 
-        process_id = (
-            kernel32.GetCurrentProcessId()
-        )
-
+        process_id = kernel32.GetCurrentProcessId()
 
         class_name = (
             "SAPAutoPrintSessionMonitor_"
@@ -500,6 +529,15 @@ def session_monitor():
         # REGISTER WINDOW CLASS
         # ====================================================
 
+        user32.RegisterClassW.argtypes = [
+            ctypes.POINTER(WNDCLASS)
+        ]
+
+        user32.RegisterClassW.restype = (
+            wintypes.ATOM
+        )
+
+
         atom = user32.RegisterClassW(
             ctypes.byref(wnd_class)
         )
@@ -521,7 +559,29 @@ def session_monitor():
         # CREATE MESSAGE-ONLY WINDOW
         # ====================================================
 
-        HWND_MESSAGE = ctypes.c_void_p(-3)
+        HWND_MESSAGE = ctypes.c_void_p(
+            -3
+        )
+
+
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p
+        ]
+
+        user32.CreateWindowExW.restype = (
+            ctypes.c_void_p
+        )
 
 
         hwnd = user32.CreateWindowExW(
@@ -556,6 +616,16 @@ def session_monitor():
         # REGISTER SESSION NOTIFICATIONS
         # ====================================================
 
+        wtsapi32.WTSRegisterSessionNotification.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD
+        ]
+
+        wtsapi32.WTSRegisterSessionNotification.restype = (
+            wintypes.BOOL
+        )
+
+
         result = (
             wtsapi32.WTSRegisterSessionNotification(
                 hwnd,
@@ -573,9 +643,16 @@ def session_monitor():
                 f"Error={error}"
             )
 
-            user32.DestroyWindow(
-                hwnd
-            )
+
+            try:
+
+                user32.DestroyWindow(
+                    hwnd
+                )
+
+            except Exception:
+                pass
+
 
             return
 
@@ -588,6 +665,36 @@ def session_monitor():
         # ====================================================
         # WINDOWS MESSAGE LOOP
         # ====================================================
+
+        user32.GetMessageW.argtypes = [
+            ctypes.POINTER(wintypes.MSG),
+            ctypes.c_void_p,
+            wintypes.UINT,
+            wintypes.UINT
+        ]
+
+        user32.GetMessageW.restype = (
+            wintypes.BOOL
+        )
+
+
+        user32.TranslateMessage.argtypes = [
+            ctypes.POINTER(wintypes.MSG)
+        ]
+
+        user32.TranslateMessage.restype = (
+            wintypes.BOOL
+        )
+
+
+        user32.DispatchMessageW.argtypes = [
+            ctypes.POINTER(wintypes.MSG)
+        ]
+
+        user32.DispatchMessageW.restype = (
+            LRESULT
+        )
+
 
         msg = wintypes.MSG()
 
@@ -604,8 +711,11 @@ def session_monitor():
 
             if result == -1:
 
+                error = ctypes.get_last_error()
+
                 log(
-                    "Session monitor GetMessage error."
+                    f"Session monitor GetMessage error: "
+                    f"{error}"
                 )
 
                 break
@@ -631,6 +741,15 @@ def session_monitor():
         # ====================================================
 
         try:
+
+            wtsapi32.WTSUnRegisterSessionNotification.argtypes = [
+                ctypes.c_void_p
+            ]
+
+            wtsapi32.WTSUnRegisterSessionNotification.restype = (
+                wintypes.BOOL
+            )
+
 
             wtsapi32.WTSUnRegisterSessionNotification(
                 hwnd
@@ -1242,7 +1361,9 @@ while not shutdown_requested:
                 handle = print_window.handle
 
 
-                log("=" * 60)
+                log(
+                    "=" * 60
+                )
 
 
                 log(

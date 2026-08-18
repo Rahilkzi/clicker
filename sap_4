@@ -1,22 +1,64 @@
+import os
+import sys
 import time
 import logging
 import threading
+import ctypes
 
 import keyboard
 from winotify import Notification, audio
 from pywinauto import Desktop
 
-# Windows session monitoring
-import win32api
-import win32gui
-import win32ts
+
+# ============================================================
+# SINGLE INSTANCE
+# ============================================================
+
+MUTEX_NAME = "SAP_Auto_Print_Single_Instance"
+
+
+kernel32 = ctypes.WinDLL(
+    "kernel32",
+    use_last_error=True
+)
+
+kernel32.CreateMutexW.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_bool,
+    ctypes.c_wchar_p
+]
+
+kernel32.CreateMutexW.restype = ctypes.c_void_p
+
+
+kernel32.GetLastError.restype = ctypes.c_ulong
+
+
+mutex = kernel32.CreateMutexW(
+    None,
+    False,
+    MUTEX_NAME
+)
+
+
+ERROR_ALREADY_EXISTS = 183
+
+
+if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+
+    # Another copy is already running.
+    # Do not start a second automation instance.
+
+    sys.exit(0)
 
 
 # ============================================================
 # SAP AUTO PRINT AUTOMATION
 # ============================================================
 
-desktop = Desktop(backend="win32")
+desktop = Desktop(
+    backend="win32"
+)
 
 
 # ============================================================
@@ -24,12 +66,11 @@ desktop = Desktop(backend="win32")
 # ============================================================
 
 CHECK_INTERVAL = 0.2
+
 ERROR_CHECK_INTERVAL = 0.2
 
-# Maximum time to wait after clicking Print
 PRINT_WAIT_TIMEOUT = 15
 
-# Small delay after Print/Error handling
 ACTION_DELAY = 0.5
 
 
@@ -37,18 +78,44 @@ ACTION_DELAY = 0.5
 # LOGGING
 # ============================================================
 
+# ------------------------------------------------------------
+# IMPORTANT:
+#
+# Use the directory where THIS SCRIPT is located.
+#
+# This prevents Task Scheduler from creating the log somewhere
+# unexpected.
+# ------------------------------------------------------------
+
+SCRIPT_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+
+LOG_FILE = os.path.join(
+    SCRIPT_DIR,
+    "sap_auto_print.log"
+)
+
+
 logging.basicConfig(
-    filename="sap_auto_print.log",
+    filename=LOG_FILE,
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    encoding="utf-8"
 )
 
 
 def log(message):
 
     try:
-        logging.info(message)
+
+        logging.info(
+            message
+        )
+
     except Exception:
+
         pass
 
 
@@ -57,19 +124,20 @@ def log(message):
 # ============================================================
 
 automation_running = False
+
 shutdown_requested = False
 
 state_lock = threading.Lock()
-hotkey_lock = threading.Lock()
-
-f8_hotkey = None
 
 
 # ============================================================
 # WINDOWS TOAST NOTIFICATION
 # ============================================================
 
-def show_notification(title, message):
+def show_notification(
+    title,
+    message
+):
 
     try:
 
@@ -79,16 +147,21 @@ def show_notification(title, message):
             msg=message
         )
 
+
         toast.set_audio(
             audio.Default,
             loop=False
         )
 
+
         toast.show()
 
+
         log(
-            f"Notification sent: {title} | {message}"
+            f"Notification sent: "
+            f"{title} | {message}"
         )
+
 
     except Exception as e:
 
@@ -106,22 +179,24 @@ def toggle_automation():
 
     global automation_running
 
+
     log(
         "F8 PRESSED"
     )
 
+
     with state_lock:
 
-        automation_running = not automation_running
+        automation_running = (
+            not automation_running
+        )
 
         running = automation_running
 
 
-    log(
-        f"F8 TOGGLE RESULT: "
-        f"automation_running={running}"
-    )
-
+    # --------------------------------------------------------
+    # START
+    # --------------------------------------------------------
 
     if running:
 
@@ -129,10 +204,16 @@ def toggle_automation():
             "Automation STARTED"
         )
 
+
         show_notification(
             "SAP Auto Print",
             "Automation STARTED"
         )
+
+
+    # --------------------------------------------------------
+    # STOP
+    # --------------------------------------------------------
 
     else:
 
@@ -140,6 +221,7 @@ def toggle_automation():
             "Automation STOPPED"
         )
 
+
         show_notification(
             "SAP Auto Print",
             "Automation STOPPED"
@@ -147,384 +229,28 @@ def toggle_automation():
 
 
 # ============================================================
-# REGISTER / RE-REGISTER F8
+# REGISTER F8
 # ============================================================
 
-def register_f8():
-
-    global f8_hotkey
-
-    with hotkey_lock:
-
-        try:
-
-            # ------------------------------------------------
-            # Remove previous F8 hook if it exists
-            # ------------------------------------------------
-
-            if f8_hotkey is not None:
-
-                try:
-
-                    keyboard.remove_hotkey(
-                        f8_hotkey
-                    )
-
-                    log(
-                        "Previous F8 hotkey removed."
-                    )
-
-                except Exception as e:
-
-                    log(
-                        "Could not remove previous F8 hotkey: "
-                        + repr(e)
-                    )
-
-                f8_hotkey = None
-
-
-            # ------------------------------------------------
-            # Register F8
-            # ------------------------------------------------
-
-            f8_hotkey = keyboard.add_hotkey(
-                "f8",
-                toggle_automation
-            )
-
-
-            log(
-                "F8 hotkey registered successfully."
-            )
-
-            return True
-
-
-        except Exception as e:
-
-            log(
-                "F8 hotkey registration error: "
-                + repr(e)
-            )
-
-            f8_hotkey = None
-
-            return False
-
-
-# ============================================================
-# WINDOWS SESSION CONSTANTS
-# ============================================================
-
-WM_WTSSESSION_CHANGE = 0x02B1
-
-WTS_SESSION_LOCK = 0x7
-WTS_SESSION_UNLOCK = 0x8
-
-NOTIFY_FOR_THIS_SESSION = 0
-
-
-# ============================================================
-# WINDOWS SESSION CALLBACK
-# ============================================================
-
-def session_window_proc(
-    hwnd,
-    msg,
-    wparam,
-    lparam
-):
-
-    try:
-
-        # ====================================================
-        # SESSION CHANGE
-        # ====================================================
-
-        if msg == WM_WTSSESSION_CHANGE:
-
-            # ------------------------------------------------
-            # WINDOWS LOCKED
-            # ------------------------------------------------
-
-            if wparam == WTS_SESSION_LOCK:
-
-                log(
-                    "WINDOWS SESSION LOCKED"
-                )
-
-
-            # ------------------------------------------------
-            # WINDOWS UNLOCKED
-            # ------------------------------------------------
-
-            elif wparam == WTS_SESSION_UNLOCK:
-
-                log(
-                    "WINDOWS SESSION UNLOCKED"
-                )
-
-
-                # ------------------------------------------------
-                # Give Windows time to restore the interactive
-                # desktop after unlocking.
-                # ------------------------------------------------
-
-                time.sleep(
-                    1.5
-                )
-
-
-                log(
-                    "Re-registering F8 after Windows unlock..."
-                )
-
-
-                success = register_f8()
-
-
-                if success:
-
-                    log(
-                        "F8 successfully restored after unlock."
-                    )
-
-
-                    show_notification(
-                        "SAP Auto Print",
-                        "Windows unlocked - F8 restored"
-                    )
-
-                else:
-
-                    log(
-                        "FAILED to restore F8 after unlock."
-                    )
-
-
-        # ----------------------------------------------------
-        # Pass unhandled messages to Windows
-        # ----------------------------------------------------
-
-        return win32gui.DefWindowProc(
-            hwnd,
-            msg,
-            wparam,
-            lparam
-        )
-
-
-    except Exception as e:
-
-        log(
-            "Session callback error: "
-            + repr(e)
-        )
-
-        return 0
-
-
-# ============================================================
-# WINDOWS SESSION MONITOR
-# ============================================================
-
-def session_monitor():
-
-    log(
-        "Starting Windows session monitor..."
+try:
+
+    keyboard.add_hotkey(
+        "f8",
+        toggle_automation
     )
 
 
-    try:
+    log(
+        "F8 hotkey registered successfully."
+    )
 
-        # ====================================================
-        # GET CURRENT PROCESS MODULE
-        # ====================================================
 
-        h_instance = win32api.GetModuleHandle(
-            None
-        )
+except Exception as e:
 
-
-        # ====================================================
-        # UNIQUE WINDOW CLASS NAME
-        # ====================================================
-
-        process_id = (
-            win32api.GetCurrentProcessId()
-        )
-
-
-        class_name = (
-            "SAPAutoPrintSessionMonitor_"
-            + str(process_id)
-        )
-
-
-        # ====================================================
-        # CREATE WINDOW CLASS
-        # ====================================================
-
-        wnd_class = win32gui.WNDCLASS()
-
-        wnd_class.hInstance = h_instance
-
-        wnd_class.lpszClassName = class_name
-
-        wnd_class.lpfnWndProc = (
-            session_window_proc
-        )
-
-
-        # ====================================================
-        # REGISTER WINDOW CLASS
-        # ====================================================
-
-        try:
-
-            win32gui.RegisterClass(
-                wnd_class
-            )
-
-            log(
-                "Session monitor window class registered."
-            )
-
-        except Exception as e:
-
-            # ------------------------------------------------
-            # Usually means class already exists.
-            # ------------------------------------------------
-
-            log(
-                "Window class registration message: "
-                + repr(e)
-            )
-
-
-        # ====================================================
-        # CREATE HIDDEN WINDOW
-        # ====================================================
-
-        hwnd = win32gui.CreateWindow(
-            class_name,
-            "SAP Auto Print Session Monitor",
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            h_instance,
-            None
-        )
-
-
-        if not hwnd:
-
-            log(
-                "Could not create session monitor window."
-            )
-
-            return
-
-
-        log(
-            f"Session monitor window created. HWND={hwnd}"
-        )
-
-
-        # ====================================================
-        # REGISTER WINDOWS SESSION NOTIFICATION
-        # ====================================================
-
-        result = (
-            win32ts.WTSRegisterSessionNotification(
-                hwnd,
-                NOTIFY_FOR_THIS_SESSION
-            )
-        )
-
-
-        if not result:
-
-            log(
-                "WTSRegisterSessionNotification failed."
-            )
-
-
-            try:
-
-                win32gui.DestroyWindow(
-                    hwnd
-                )
-
-            except Exception:
-                pass
-
-
-            return
-
-
-        log(
-            "Windows session monitor started successfully."
-        )
-
-
-        # ====================================================
-        # WINDOWS MESSAGE LOOP
-        # ====================================================
-
-        while not shutdown_requested:
-
-            win32gui.PumpWaitingMessages()
-
-            time.sleep(
-                0.1
-            )
-
-
-        # ====================================================
-        # CLEANUP
-        # ====================================================
-
-        try:
-
-            win32ts.WTSUnRegisterSessionNotification(
-                hwnd
-            )
-
-        except Exception as e:
-
-            log(
-                "Session notification cleanup error: "
-                + repr(e)
-            )
-
-
-        try:
-
-            win32gui.DestroyWindow(
-                hwnd
-            )
-
-        except Exception:
-            pass
-
-
-        log(
-            "Windows session monitor stopped."
-        )
-
-
-    except Exception as e:
-
-        log(
-            "Session monitor error: "
-            + repr(e)
-        )
+    log(
+        "F8 registration error: "
+        + repr(e)
+    )
 
 
 # ============================================================
@@ -534,6 +260,7 @@ def session_monitor():
 def get_print_windows():
 
     result = []
+
 
     try:
 
@@ -554,7 +281,9 @@ def get_print_windows():
                         window
                     )
 
+
             except Exception:
+
                 pass
 
 
@@ -577,6 +306,7 @@ def get_pdf_error_windows():
 
     result = []
 
+
     try:
 
         dialogs = desktop.windows(
@@ -584,12 +314,14 @@ def get_pdf_error_windows():
             visible_only=True
         )
 
+
     except Exception as e:
 
         log(
             "PDF dialog enumeration error: "
             + repr(e)
         )
+
 
         return result
 
@@ -612,13 +344,11 @@ def get_pdf_error_windows():
 
             # ------------------------------------------------
             # PDF ERROR IDENTIFICATION
-            #
-            # Example:
-            #
-            # C:\temp\0999324283.pdf
             # ------------------------------------------------
 
-            if not title.lower().endswith(".pdf"):
+            if not title.lower().endswith(
+                ".pdf"
+            ):
 
                 continue
 
@@ -657,10 +387,12 @@ def get_pdf_error_windows():
 
 
                     except Exception:
+
                         pass
 
 
             except Exception:
+
                 pass
 
 
@@ -679,6 +411,7 @@ def get_pdf_error_windows():
 
 
         except Exception:
+
             pass
 
 
@@ -689,7 +422,9 @@ def get_pdf_error_windows():
 # FIND SAP PRINT BUTTON
 # ============================================================
 
-def find_print_button(print_window):
+def find_print_button(
+    print_window
+):
 
     try:
 
@@ -699,15 +434,15 @@ def find_print_button(print_window):
 
 
         log(
-            f"Buttons found in Print window: "
-            f"{len(buttons)}"
+            "Buttons found in Print window: "
+            + str(len(buttons))
         )
 
 
         # ----------------------------------------------------
-        # YOUR TESTED SAP PRINT DIALOG
+        # YOUR WORKING SAP DIALOG
         #
-        # [2] = PRINT button
+        # Button [2] = PRINT
         # ----------------------------------------------------
 
         if len(buttons) >= 3:
@@ -723,6 +458,7 @@ def find_print_button(print_window):
 
 
             except Exception:
+
                 pass
 
 
@@ -736,6 +472,7 @@ def find_print_button(print_window):
             + repr(e)
         )
 
+
         return None
 
 
@@ -743,7 +480,9 @@ def find_print_button(print_window):
 # CLICK PRINT BUTTON
 # ============================================================
 
-def click_print(print_window):
+def click_print(
+    print_window
+):
 
     try:
 
@@ -762,6 +501,7 @@ def click_print(print_window):
             log(
                 "PRINT button could not be identified."
             )
+
 
             return False
 
@@ -797,11 +537,12 @@ def click_print(print_window):
 
 
         except Exception:
+
             pass
 
 
         # ----------------------------------------------------
-        # CLICK PRINT
+        # CLICK
         # ----------------------------------------------------
 
         log(
@@ -826,6 +567,7 @@ def click_print(print_window):
             "Could not click PRINT button: "
             + repr(e)
         )
+
 
         return False
 
@@ -885,6 +627,7 @@ def close_pdf_error(
             + repr(e)
         )
 
+
         return False
 
 
@@ -892,7 +635,9 @@ def close_pdf_error(
 # WAIT FOR PRINT RESULT
 # ============================================================
 
-def wait_after_print(print_window):
+def wait_after_print(
+    print_window
+):
 
     start_time = time.time()
 
@@ -938,7 +683,7 @@ def wait_after_print(print_window):
 
 
         # ====================================================
-        # CHECK WHETHER PRINT WINDOW CLOSED
+        # CHECK PRINT WINDOW
         # ====================================================
 
         try:
@@ -949,17 +694,21 @@ def wait_after_print(print_window):
                     "Print window closed."
                 )
 
+
                 return "SUCCESS"
 
 
         except Exception:
 
+            # ------------------------------------------------
             # Window handle is no longer valid.
+            # ------------------------------------------------
+
             return "SUCCESS"
 
 
         # ====================================================
-        # WAIT A LITTLE
+        # WAIT
         # ====================================================
 
         time.sleep(
@@ -984,41 +733,28 @@ def wait_after_print(print_window):
 # ============================================================
 
 log(
-    "=" * 60
+    ""
+)
+
+log(
+    "=" * 70
 )
 
 log(
     "SAP Auto Print started."
 )
 
-
-# ============================================================
-# REGISTER F8
-# ============================================================
-
-if register_f8():
-
-    log(
-        "Initial F8 registration completed."
-    )
-
-else:
-
-    log(
-        "Initial F8 registration FAILED."
-    )
-
-
-# ============================================================
-# START WINDOWS SESSION MONITOR
-# ============================================================
-
-session_thread = threading.Thread(
-    target=session_monitor,
-    daemon=True
+log(
+    f"Script directory: {SCRIPT_DIR}"
 )
 
-session_thread.start()
+log(
+    f"Log file: {LOG_FILE}"
+)
+
+log(
+    "Single-instance protection enabled."
+)
 
 
 # ============================================================
@@ -1073,6 +809,7 @@ while not shutdown_requested:
                 ACTION_DELAY
             )
 
+
             continue
 
 
@@ -1088,6 +825,7 @@ while not shutdown_requested:
             time.sleep(
                 CHECK_INTERVAL
             )
+
 
             continue
 
@@ -1109,7 +847,9 @@ while not shutdown_requested:
                     break
 
 
-                handle = print_window.handle
+                handle = (
+                    print_window.handle
+                )
 
 
                 log(
@@ -1138,7 +878,9 @@ while not shutdown_requested:
                         )
                     )
 
+
                 except Exception:
+
                     pass
 
 
@@ -1166,18 +908,16 @@ while not shutdown_requested:
                     )
 
 
-                    # Don't remember this window.
-                    # It can be tried again.
-
                     time.sleep(
                         0.5
                     )
+
 
                     continue
 
 
                 # =================================================
-                # WAIT FOR THIS PRINT OPERATION
+                # WAIT FOR PRINT RESULT
                 # =================================================
 
                 result = wait_after_print(
@@ -1282,6 +1022,7 @@ try:
     keyboard.unhook_all()
 
 except Exception:
+
     pass
 
 
